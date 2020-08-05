@@ -125,7 +125,7 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 	if me.AppleClient != nil {
 		LogInfo(fmt.Sprintf("Sending apple push notification for device=%v and type=%v", me.ApplePushSettings.Type, msg.Type))
 		LogInfo(fmt.Sprintf("NNotification=%v", notification))
-		LogInfo(fmt.Sprintf("NNotification=%v", data))
+		LogInfo(fmt.Sprintf("Daata=%v", notification.Payload))
 
 		start := time.Now()
 		res, err := me.AppleClient.Push(notification)
