@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mattermost/mattermost-push-proxy/server"
+	"mattermost-push-proxy/server"
 )
 
 var flagConfigFile string

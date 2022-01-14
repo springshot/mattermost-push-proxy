@@ -6,6 +6,8 @@ package server
 import (
 	"fmt"
 	"time"
+	"regexp"
+	"strings"
 
 	"github.com/appleboy/go-fcm"
 	"github.com/kyokomi/emoji"
@@ -44,7 +46,34 @@ func (me *AndroidNotificationServer) SendNotification(msg *PushNotification) Pus
 	}
 
 	if pushType == PUSH_TYPE_MESSAGE {
-		data["message"] = emoji.Sprint(msg.Message)
+		// Springshot - replace mentions in a message from @username{{Full Name}} to @Full Name
+		var message = msg.Message;
+		var mention_regex = regexp.MustCompile(`@[\w\d._-]+{{[^}]*}}`)
+		var mention_matches = mention_regex.FindAllString(message, -1)
+		LogInfo(fmt.Sprintf("Springshot:: Mention matches = %v", mention_matches))
+		
+		for i := 0; i < len(mention_matches); i++ {
+			var matched = mention_matches[i]
+			var first_split = strings.Split(matched, "{{")
+			var second_split = strings.Split(first_split[1], "}}")
+			var full_name = strings.Trim(second_split[0], " ")
+			message = strings.ReplaceAll(message, matched, "@"+full_name)
+		}
+
+		// Springshot - Call notification messages needs to be parsed into differrent attributes
+	  var message_split = strings.Split(message, "springshot_call=")
+		if len(message_split) > 1 { // This is a call message
+			LogInfo(fmt.Sprintf("Springshot:: Call attributes = %v", message_split[1]))
+			message = message_split[0]
+			var call_attributes = strings.Split(message_split[1], "|")
+			data["call_id"] = call_attributes[0]
+			data["caller_name"] = call_attributes[1]
+			data["group_name"] = call_attributes[2]
+			data["avatar"] = call_attributes[3]
+			LogInfo(fmt.Sprintf("Springshot:: Payload with call attributes = %v", data))
+		}
+
+		data["message"] = emoji.Sprint(message)
 		data["channel_name"] = msg.ChannelName
 		data["post_id"] = msg.PostId
 		data["root_id"] = msg.RootId
