@@ -4,10 +4,11 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
-	"time"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/kyokomi/emoji"
 	apns "github.com/sideshow/apns2"
@@ -16,8 +17,10 @@ import (
 )
 
 type AppleNotificationServer struct {
-	ApplePushSettings ApplePushSettings
-	AppleClient       *apns.Client
+	ApplePushSettings  ApplePushSettings
+	AppleClientManager *apns.ClientManager
+	ApplePushCert      tls.Certificate
+	AppleVoipCert      tls.Certificate
 }
 
 func NewAppleNotificationServer(settings ApplePushSettings) NotificationServer {
@@ -27,39 +30,101 @@ func NewAppleNotificationServer(settings ApplePushSettings) NotificationServer {
 func (me *AppleNotificationServer) Initialize() bool {
 	LogInfo(fmt.Sprintf("Initializing apple notification server for type=%v", me.ApplePushSettings.Type))
 
+	me.AppleClientManager = apns.NewClientManager()
+	me.AppleClientManager.MaxAge = 1000 * time.Hour
+
+	var appleCertErr error
 	if len(me.ApplePushSettings.ApplePushCertPrivate) > 0 {
-		appleCert, appleCertErr := certificate.FromPemFile(me.ApplePushSettings.ApplePushCertPrivate, me.ApplePushSettings.ApplePushCertPassword)
+		me.ApplePushCert, appleCertErr = certificate.FromPemFile(me.ApplePushSettings.ApplePushCertPrivate, me.ApplePushSettings.ApplePushCertPassword)
 		if appleCertErr != nil {
 			LogCritical(fmt.Sprintf("Failed to load the apple pem cert err=%v for type=%v", appleCertErr, me.ApplePushSettings.Type))
 			return false
 		}
 
 		if me.ApplePushSettings.ApplePushUseDevelopment {
-			me.AppleClient = apns.NewClient(appleCert).Development()
+			me.AppleClientManager.Add(apns.NewClient(me.ApplePushCert).Development())
 		} else {
-			me.AppleClient = apns.NewClient(appleCert).Production()
+			me.AppleClientManager.Add(apns.NewClient(me.ApplePushCert).Production())
 		}
 
-		return true
 	} else {
 		LogError(fmt.Sprintf("Apple push notifications not configured.  Missing ApplePushCertPrivate. for type=%v", me.ApplePushSettings.Type))
 		return false
 	}
+
+	if len(me.ApplePushSettings.AppleVoipPushCertPrivate) > 0 {
+		me.AppleVoipCert, appleCertErr = certificate.FromPemFile(me.ApplePushSettings.AppleVoipPushCertPrivate, me.ApplePushSettings.AppleVoipPushCertPassword)
+		if appleCertErr != nil {
+			LogCritical(fmt.Sprintf("Failed to load the apple pem cert err=%v for type=%v", appleCertErr, me.ApplePushSettings.Type))
+			return false
+		}
+
+		if me.ApplePushSettings.ApplePushUseDevelopment {
+			c := apns.NewClient(me.AppleVoipCert)
+			c.Host = "https://api.development.push.apple.com"
+			me.AppleClientManager.Add(c)
+		} else {
+			me.AppleClientManager.Add(apns.NewClient(me.AppleVoipCert).Production())
+		}
+
+		return true
+	} else {
+		LogError(fmt.Sprintf("Apple push notifications not configured.  Missing AppleVoipPushCertPrivate. for type=%v", me.ApplePushSettings.Type))
+		return false
+	}
+
 }
 
 func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushResponse {
+	call_message := false
+	if len(strings.Split(msg.Message, "springshot_call=")) > 1 {
+		call_message = true
+	}
+
+	device_ids := strings.Split(msg.DeviceId, "|||")
+	LogInfo(fmt.Sprintf("Springshot:: Msg DeviceIds OG = %v, Splits = %v", msg.DeviceId, device_ids))
+
+	device_id_regular := msg.DeviceId
+	var device_id_voip string
+
+	call_kit := false
+	if len(device_ids) > 1 {
+		if len(device_ids[1]) > 0 {
+			call_kit = true
+		}
+		device_id_regular = device_ids[0]
+		device_id_voip = device_ids[1]
+	}
+
+	LogInfo(fmt.Sprintf("Springshot:: CallKit = %v, CallMessage = %v", call_kit, call_message))
 
 	data := payload.NewPayload()
 	data.Badge(msg.Badge)
 
 	notification := &apns.Notification{}
-	notification.DeviceToken = msg.DeviceId
+
+	client_to_use := me.AppleClientManager.Get(me.ApplePushCert)
+	if call_message && call_kit {
+		notification.DeviceToken = device_id_voip
+		notification.Topic = me.ApplePushSettings.AppleVoipPushTopic
+		notification.Priority = apns.PriorityHigh
+		notification.Expiration = time.Now().Add(time.Second * 60)
+		notification.PushType = apns.EPushType(apns.PushTypeVOIP)
+
+		client_to_use = me.AppleClientManager.Get(me.AppleVoipCert)
+	} else {
+		notification.DeviceToken = device_id_regular
+		notification.Topic = me.ApplePushSettings.ApplePushTopic
+	}
+
 	notification.Payload = data
-	notification.Topic = me.ApplePushSettings.ApplePushTopic
 
 	var pushType = msg.Type
 	if msg.Type != PUSH_TYPE_CLEAR {
 		pushType = PUSH_TYPE_MESSAGE
+		if call_message && call_kit {
+			pushType = PUSH_TYPE_VOIP
+		}
 		data.Category(msg.Category)
 		data.Sound("default")
 		data.Custom("version", msg.Version)
@@ -81,12 +146,12 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 
 		// Springshot - Call notification messages needs to be parsed into differrent attributes
 		var message_split = strings.Split(message, "springshot_call=")
-		if len(message_split) > 1 { // This is a call message
-			data.Sound("call_start.mp3")
+		if call_message { // This is a call message
 			LogInfo(fmt.Sprintf("Springshot:: Call attributes = %v", message_split[1]))
 			message = message_split[0]
 			var call_attributes = strings.Split(message_split[1], "|")
 
+			data.Sound("call_start.mp3")
 			data.Custom("call_id", call_attributes[0])
 			data.Custom("caller_name", call_attributes[1])
 			data.Custom("group_name", call_attributes[2])
@@ -111,10 +176,6 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 
 	incrementNotificationTotal(PUSH_NOTIFY_APPLE, pushType)
 	data.Custom("type", pushType)
-
-
-
-
 
 	if len(msg.AckId) > 0 {
 		data.Custom("ack_id", msg.AckId)
@@ -157,10 +218,14 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 		data.Custom("from_webhook", msg.FromWebhook)
 	}
 
-	if me.AppleClient != nil {
-		LogInfo(fmt.Sprintf("Sending apple push notification for device=%v and type=%v", me.ApplePushSettings.Type, msg.Type))
+	if client_to_use != nil {
+		LogInfo(fmt.Sprintf("Sending apple push notification for device=%v and type=%v and notification=%v", me.ApplePushSettings.Type, pushType, notification))
+		LogInfo(fmt.Sprintf("Notification - DeviceToken=%v and Topic=%v and Priority=%v and Expiration=%v and PushType=%v and Payload = %v", notification.DeviceToken, notification.Topic, notification.Priority, notification.Expiration, notification.PushType, notification.Payload))
+
 		start := time.Now()
-		res, err := me.AppleClient.Push(notification)
+
+		res, err := client_to_use.Push(notification)
+
 		observerNotificationResponse(PUSH_NOTIFY_APPLE, time.Since(start).Seconds())
 		if err != nil {
 			LogError(fmt.Sprintf("Failed to send apple push sid=%v did=%v err=%v type=%v", msg.ServerId, msg.DeviceId, err, me.ApplePushSettings.Type))

@@ -13,6 +13,7 @@ const (
 	PUSH_NOTIFY_ANDROID = "android"
 	PUSH_TYPE_MESSAGE   = "message"
 	PUSH_TYPE_CLEAR     = "clear"
+	PUSH_TYPE_VOIP      = "voip"
 )
 
 type PushNotificationAck struct {

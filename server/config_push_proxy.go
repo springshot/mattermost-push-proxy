@@ -20,11 +20,14 @@ type ConfigPushProxy struct {
 }
 
 type ApplePushSettings struct {
-	Type                    string
-	ApplePushUseDevelopment bool
-	ApplePushCertPrivate    string
-	ApplePushCertPassword   string
-	ApplePushTopic          string
+	Type                      string
+	ApplePushUseDevelopment   bool
+	ApplePushCertPrivate      string
+	ApplePushCertPassword     string
+	AppleVoipPushCertPrivate  string
+	AppleVoipPushCertPassword string
+	ApplePushTopic            string
+	AppleVoipPushTopic        string
 }
 
 type AndroidPushSettings struct {
