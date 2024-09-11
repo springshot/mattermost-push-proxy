@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/kyokomi/emoji"
@@ -145,6 +147,35 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 			data.MutableContent()
 			if msg.Type == PushTypeMessage {
 				data.ContentAvailable()
+			}
+
+			// Springshot - replace mentions in a message from @username{{Full Name}} to @Full Name
+			var message = msg.Message
+			var mention_regex = regexp.MustCompile(`@[\w\d._-]+{{[^}]*}}`)
+			var mention_matches = mention_regex.FindAllString(message, -1)
+			me.logger.Infof(fmt.Sprintf("Springshot:: Mention matches = %v", mention_matches))
+
+			for i := 0; i < len(mention_matches); i++ {
+				var matched = mention_matches[i]
+				var first_split = strings.Split(matched, "{{")
+				var second_split = strings.Split(first_split[1], "}}")
+				var full_name = strings.Trim(second_split[0], " ")
+				message = strings.ReplaceAll(message, matched, "@"+full_name)
+			}
+
+			// Springshot - Call notification messages needs to be parsed into differrent attributes
+			var message_split = strings.Split(message, "springshot_call=")
+			if len(message_split) > 1 { // This is a call message
+				data.Sound("call_start.mp3")
+				me.logger.Infof(fmt.Sprintf("Springshot:: Call attributes = %v", message_split[1]))
+				message = message_split[0]
+				var call_attributes = strings.Split(message_split[1], "|")
+
+				data.Custom("call_id", call_attributes[0])
+				data.Custom("caller_name", call_attributes[1])
+				data.Custom("group_name", call_attributes[2])
+				data.Custom("avatar", call_attributes[3])
+				me.logger.Infof(fmt.Sprintf("Springshot:: Payload with call attributes = %v", data))
 			}
 
 			if msg.ChannelName != "" && msg.Version == "v2" {
