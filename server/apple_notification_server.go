@@ -115,6 +115,22 @@ func (me *AppleNotificationServer) Initialize() error {
 }
 
 func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushResponse {
+	call_message := false
+	if len(strings.Split(msg.Message, "springshot_call=")) > 1 {
+		call_message = true
+	}
+	device_ids := strings.Split(msg.DeviceID, "|||")
+	me.logger.Infof(fmt.Sprintf("Springshot:: Msg DeviceIds OG = %v, Splits = %v", msg.DeviceID, device_ids))
+	device_id_regular := msg.DeviceID
+	var device_id_voip string
+	call_kit := false
+	if len(device_ids) > 1 {
+		if len(device_ids[1]) > 0 {
+			call_kit = true
+		}
+		device_id_regular = device_ids[0]
+		device_id_voip = device_ids[1]
+	}
 
 	data := payload.NewPayload()
 	if msg.Badge == 0 && msg.Type == PushTypeClear && msg.AppVersion > 1 {
@@ -124,10 +140,16 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 	}
 
 	notification := &apns.Notification{}
-	notification.DeviceToken = msg.DeviceID
 	notification.Payload = data
-	notification.Topic = me.ApplePushSettings.ApplePushTopic
 	notification.Priority = apns.PriorityHigh
+	if call_message && call_kit {
+		notification.DeviceToken = device_id_voip
+		notification.Topic = me.ApplePushSettings.AppleVoipPushTopic
+		notification.PushType = apns.EPushType(apns.PushTypeVOIP)
+	} else {
+		notification.DeviceToken = device_id_regular
+		notification.Topic = me.ApplePushSettings.ApplePushTopic
+	}
 
 	var pushType = msg.Type
 	if msg.IsIDLoaded {
@@ -143,6 +165,7 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 		case PushTypeMessage, PushTypeSession:
 			data.Category(msg.Category)
 			data.Sound("default")
+
 			data.Custom("version", msg.Version)
 			data.MutableContent()
 			if msg.Type == PushTypeMessage {
@@ -180,10 +203,10 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 
 			if msg.ChannelName != "" && msg.Version == "v2" {
 				data.AlertTitle(msg.ChannelName)
-				data.AlertBody(emoji.Sprint(msg.Message))
+				data.AlertBody(emoji.Sprint(message))
 				data.Custom("channel_name", msg.ChannelName)
 			} else {
-				data.Alert(emoji.Sprint(msg.Message))
+				data.Alert(emoji.Sprint(message))
 
 				if msg.ChannelName != "" {
 					data.Custom("channel_name", msg.ChannelName)
@@ -251,7 +274,8 @@ func (me *AppleNotificationServer) SendNotification(msg *PushNotification) PushR
 	}
 
 	if me.AppleClient != nil {
-		me.logger.Infof("Sending apple push notification for device=%v type=%v ackId=%v", me.ApplePushSettings.Type, msg.Type, msg.AckID)
+		me.logger.Infof("Sending apple push notification for device=%v and type=%v and notification=%v and ackId=%v", me.ApplePushSettings.Type, pushType, notification, msg.AckID)
+		me.logger.Infof("Notification - DeviceToken=%v and Topic=%v and Priority=%v and Expiration=%v and PushType=%v and Payload = %v", notification.DeviceToken, notification.Topic, notification.Priority, notification.Expiration, notification.PushType, notification.Payload)
 		start := time.Now()
 
 		ctx, cancel := context.WithTimeout(context.Background(), me.sendTimeout)

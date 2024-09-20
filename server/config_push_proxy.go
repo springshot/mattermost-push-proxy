@@ -30,6 +30,7 @@ type ApplePushSettings struct {
 	ApplePushCertPrivate    string
 	ApplePushCertPassword   string
 	ApplePushTopic          string
+	AppleVoipPushTopic      string
 	AppleAuthKeyFile        string
 	AppleAuthKeyID          string
 	AppleTeamID             string
